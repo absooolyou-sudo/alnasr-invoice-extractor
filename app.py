@@ -344,7 +344,7 @@ with st.sidebar:
 
 # العنوان الرئيسي
 st.title("📄 Absoool Env System")
-st.subheader("نظام استخراج فواتير ثنائي اللغة — متجر النُّر للأحذية")
+st.subheader("نظام استخراج فواتير ثنائي اللغة — متجر النسر للأحذية الراقية ")
 st.markdown("---")
 
 # المحتوى الرئيسي
@@ -497,6 +497,6 @@ st.markdown("---")
 st.markdown("""
 <div class="rtl" style="text-align: center; color: #64748b; padding: 20px;">
     <p>🔒 جميع البيانات تتم معالجتها محلياً ولا يتم إرسالها إلى أي خادم خارجي</p>
-    <p>© Absoool Env System — نظام استخراج الفواتير</p>
+    <p>©   Eng Abduslam Alomary — نظام استخراج الفواتير</p>
 </div>
 """, unsafe_allow_html=True)
