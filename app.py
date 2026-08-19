@@ -496,7 +496,7 @@ with col2:
 st.markdown("---")
 st.markdown("""
 <div class="rtl" style="text-align: center; color: #64748b; padding: 20px;">
-    <p>🔒 جميع البيانات تتم معالجتها محلياً ولا يتم إرسالها إلى أي خادم خارجي</p>
-    <p>©   Eng Abduslam Alomary — نظام استخراج الفواتير</p>
+    <p>التطبيق حصري لمنتسبين مؤسسة النسر للأحذية فقط  </p>
+    <p>©   Eng Abduslam Alomary —  نظام استخراج الفواتير</p>
 </div>
 """, unsafe_allow_html=True)
