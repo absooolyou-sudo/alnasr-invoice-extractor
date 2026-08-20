@@ -13,7 +13,7 @@ import streamlit as st
 
 # ==================== المكتبات الأساسية ====================
 try:
-   import pymupdf as fitz
+    import pymupdf as fitz  # PyMuPDF
     PYMUPDF_AVAILABLE = True
 except ImportError:
     PYMUPDF_AVAILABLE = False
