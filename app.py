@@ -1,5 +1,5 @@
 """
-نظام استخراج فواتير - النسخة الرابعة (لوحة التحكم الذكية)
+نظام النسر لاستخراج الفواتير - النسخة الرابعة المصلحة
 المهندس: عبد السلام فيصل العمري
 """
 
@@ -246,20 +246,10 @@ def format_invoice(data: dict) -> str:
 
 # ==================== دوال إدارة الإعدادات والإحصائيات ====================
 
-def save_settings(number: int, total_extracted: int = None):
-    """حفظ الإعدادات والإحصائيات."""
-    current_data = load_all_settings()
-    current_data["next_invoice_number"] = number
-    if total_extracted is not None:
-        current_data["total_extracted"] = total_extracted
-    if "total_extracted" not in current_data:
-        current_data["total_extracted"] = 0
-    if "today_date" not in current_data or current_data["today_date"] != datetime.now().strftime("%Y-%m-%d"):
-        current_data["today_date"] = datetime.now().strftime("%Y-%m-%d")
-        current_data["today_count"] = 0
-    
+def save_full_settings(data: dict):
+    """حفظ جميع الإعدادات والإحصائيات."""
     STATE_FILE.write_text(
-        json.dumps(current_data, ensure_ascii=False, indent=2),
+        json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
 
@@ -274,6 +264,8 @@ def load_all_settings() -> dict:
             data["today_count"] = 0
         if "today_count" not in data:
             data["today_count"] = 0
+        if "next_invoice_number" not in data:
+            data["next_invoice_number"] = DEFAULT_START_NUMBER
         return data
     except Exception:
         return {
@@ -287,19 +279,18 @@ def load_next_number() -> int:
     data = load_all_settings()
     return int(data.get("next_invoice_number", DEFAULT_START_NUMBER))
 
-def increment_stats():
-    """زيادة الإحصائيات بعد عملية استخراج ناجحة."""
+def increment_stats_and_save(next_number: int):
+    """زيادة الإحصائيات وحفظها."""
     data = load_all_settings()
+    data["next_invoice_number"] = next_number
     data["total_extracted"] = data.get("total_extracted", 0) + 1
     if data.get("today_date") == datetime.now().strftime("%Y-%m-%d"):
         data["today_count"] = data.get("today_count", 0) + 1
     else:
         data["today_date"] = datetime.now().strftime("%Y-%m-%d")
         data["today_count"] = 1
-    STATE_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
+    save_full_settings(data)
+    return data
 
 # ==================== دوال لوحة التحكم ====================
 
@@ -320,6 +311,22 @@ def get_cycle_info(current_number: int) -> dict:
         "progress": position / MAX_CYCLE,
         "next_reset": position == MAX_CYCLE
     }
+
+# ==================== تهيئة حالة الجلسة ====================
+if 'settings_data' not in st.session_state:
+    st.session_state.settings_data = load_all_settings()
+
+if 'next_number' not in st.session_state:
+    st.session_state.next_number = int(st.session_state.settings_data.get("next_invoice_number", DEFAULT_START_NUMBER))
+
+if 'extraction_result' not in st.session_state:
+    st.session_state.extraction_result = None
+
+if 'extraction_data' not in st.session_state:
+    st.session_state.extraction_data = None
+
+if 'uploaded_file_name' not in st.session_state:
+    st.session_state.uploaded_file_name = None
 
 # ==================== واجهة Streamlit ====================
 
@@ -563,13 +570,6 @@ function showToast(message) {
 </script>
 """, unsafe_allow_html=True)
 
-# ==================== تهيئة حالة الجلسة ====================
-if 'next_number' not in st.session_state:
-    st.session_state.next_number = load_next_number()
-
-if 'settings_data' not in st.session_state:
-    st.session_state.settings_data = load_all_settings()
-
 # ==================== الشريط الجانبي ====================
 with st.sidebar:
     st.markdown("### ⚙️ الإعدادات")
@@ -581,10 +581,14 @@ with st.sidebar:
         help="يزداد الرقم تلقائياً بعد كل استخراج ناجح"
     )
     
+    # تحديث الرقم في الجلسة إذا غيره المستخدم
+    if invoice_number != st.session_state.next_number:
+        st.session_state.next_number = invoice_number
+    
     st.markdown("---")
     
     # معلومات سريعة في الشريط الجانبي
-    cycle_info = get_cycle_info(invoice_number)
+    cycle_info = get_cycle_info(st.session_state.next_number)
     st.markdown(f"""
     <div class="cycle-container" style="padding: 16px;">
         <div class="cycle-title" style="font-size: 15px;">🔄 الدورة الحالية</div>
@@ -613,13 +617,13 @@ st.markdown("<br>", unsafe_allow_html=True)
 col1, col2, col3, col4 = st.columns(4)
 
 settings = st.session_state.settings_data
-cycle_info = get_cycle_info(invoice_number)
+cycle_info = get_cycle_info(st.session_state.next_number)
 
 with col1:
     st.markdown(f"""
     <div class="dashboard-card">
         <div class="card-icon">📄</div>
-        <div class="card-value">{invoice_number}</div>
+        <div class="card-value">{st.session_state.next_number}</div>
         <div class="card-label">رقم الفاتورة الحالية</div>
     </div>
     """, unsafe_allow_html=True)
@@ -657,6 +661,10 @@ st.markdown("<br>", unsafe_allow_html=True)
 col_cycle1, col_cycle2 = st.columns([2, 1])
 
 with col_cycle1:
+    next_reset_html = ""
+    if cycle_info['next_reset']:
+        next_reset_html = "<div style='margin-top: 12px; padding: 8px; background: #fef2f2; color: #991b1b; border-radius: 8px; font-weight: bold;'>🎉 ستبدأ دورة جديدة مع الطلب القادم!</div>"
+    
     st.markdown(f"""
     <div class="cycle-container">
         <div class="cycle-title">🔄 تقدم الدورة الحالية (كل {MAX_CYCLE} طلب تبدأ دورة جديدة)</div>
@@ -683,12 +691,11 @@ with col_cycle1:
                 <div class="cycle-info-label">حد الدورة</div>
             </div>
         </div>
-        {"<div style='margin-top: 12px; padding: 8px; background: #fef2f2; color: #991b1b; border-radius: 8px; font-weight: bold;'>🎉 ستبدأ دورة جديدة مع الطلب القادم!</div>" if cycle_info['next_reset'] else ""}
+        {next_reset_html}
     </div>
     """, unsafe_allow_html=True)
 
 with col_cycle2:
-    # شارت دائري بسيط باستخدام CSS
     progress_pct = cycle_info['progress'] * 100
     circumference = 2 * 3.14159 * 70
     offset = circumference - (progress_pct / 100) * circumference
@@ -728,11 +735,12 @@ with col1:
     uploaded_file = st.file_uploader(
         "اختر ملف الفاتورة",
         type="pdf",
-        help="اختر ملف PDF للفاتورة لاستخراج البيانات منه"
+        key="pdf_uploader"
     )
     
     if uploaded_file:
         st.success(f"✅ تم اختيار الملف: {uploaded_file.name}")
+        st.session_state.uploaded_file_name = uploaded_file.name
     
     extract_btn = st.button(
         "🚀 استخراج البيانات",
@@ -743,16 +751,17 @@ with col1:
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
+    # ========== عملية الاستخراج ==========
     if uploaded_file and extract_btn:
         # شريط تقدم الاستخراج
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # الخطوة 1: قراءة الملف
-        status_text.text("⏳ الخطوة 1/3: جاري قراءة ملف PDF...")
-        progress_bar.progress(20)
-        
         try:
+            # الخطوة 1: قراءة الملف
+            status_text.text("⏳ الخطوة 1/3: جاري قراءة ملف PDF...")
+            progress_bar.progress(20)
+            
             # استخراج النص
             text = extract_pdf_text(uploaded_file)
             progress_bar.progress(50)
@@ -766,75 +775,89 @@ with col2:
             progress_bar.progress(80)
             status_text.text("⏳ الخطوة 3/3: جاري تنسيق النتائج...")
             
-            # تحديث الإحصائيات
-            st.session_state.next_number = invoice_number + 1
-            save_settings(st.session_state.next_number)
-            increment_stats()
-            st.session_state.settings_data = load_all_settings()
+            # تحديث الإحصائيات وحفظها
+            next_num = invoice_number + 1
+            updated_settings = increment_stats_and_save(next_num)
+            
+            # تحديث حالة الجلسة
+            st.session_state.next_number = next_num
+            st.session_state.settings_data = updated_settings
+            st.session_state.extraction_result = result
+            st.session_state.extraction_data = data
             
             progress_bar.progress(100)
-            status_text.text("✅ تم الانتهاء!")
+            status_text.text("✅ تم الانتهاء بنجاح!")
             
-            # عرض النتيجة
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown("### ✅ نتيجة الاستخراج")
-            
-            lines = result.split('\n')
-            formatted_html = '<div class="result-box">'
-            for line in lines:
-                if ':' in line:
-                    label, value = line.split(':', 1)
-                    formatted_html += f'<div class="line"><span class="label">{label.strip()}:</span><span class="value">{value.strip()}</span></div>'
-                else:
-                    formatted_html += f'<div class="line"><span class="value">{line}</span></div>'
-            formatted_html += '</div>'
-            
-            st.markdown(formatted_html, unsafe_allow_html=True)
-            
-            st.info(f"🔢 رقم الفاتورة التالي: {st.session_state.next_number}")
-            
-            # أزرار الإجراءات
-            st.markdown("### 📌 الإجراءات")
-            
-            copy_btn_html = f"""
-            <button onclick="copyToClipboard(`{result}`)" 
-                style="width:100%;padding:12px;background-color:#243b53;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:bold;font-size:16px;margin:4px 0;">
-                📋 نسخ النتيجة للحافظة
-            </button>
-            """
-            st.markdown(copy_btn_html, unsafe_allow_html=True)
-            
-            col_download, col_whatsapp = st.columns(2)
-            
-            with col_download:
-                st.download_button(
-                    label="💾 تحميل كملف نصي",
-                    data=result,
-                    file_name=f"فاتورة_{invoice_number}.txt",
-                    mime="text/plain",
-                    use_container_width=True
-                )
-            
-            with col_whatsapp:
-                whatsapp_text = result.replace('\n', '%0A')
-                whatsapp_url = f"https://web.whatsapp.com/send?text={whatsapp_text}"
-                st.markdown(
-                    f'<a href="{whatsapp_url}" target="_blank" style="text-decoration:none;">'
-                    f'<button style="width:100%;padding:12px;background-color:#25D366;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:bold;font-size:16px;margin:4px 0;">'
-                    f'💬 فتح في واتساب'
-                    f'</button></a>',
-                    unsafe_allow_html=True
-                )
-            
-            # تحديث الصفحة لعرض الإحصائيات الجديدة
-            st.rerun()
+            # إزالة شريط التقدم بعد ثانية
+            import time
+            time.sleep(0.8)
+            progress_bar.empty()
+            status_text.empty()
             
         except Exception as e:
             progress_bar.empty()
             status_text.empty()
             st.error(f"❌ حدث خطأ أثناء الاستخراج: {str(e)}")
+            st.session_state.extraction_result = None
+            st.session_state.extraction_data = None
     
-    elif not uploaded_file:
+    # ========== عرض النتائج ==========
+    if st.session_state.extraction_result:
+        result = st.session_state.extraction_result
+        data = st.session_state.extraction_data
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("### ✅ نتيجة الاستخراج")
+        
+        lines = result.split('\n')
+        formatted_html = '<div class="result-box">'
+        for line in lines:
+            if ':' in line:
+                label, value = line.split(':', 1)
+                formatted_html += f'<div class="line"><span class="label">{label.strip()}:</span><span class="value">{value.strip()}</span></div>'
+            else:
+                formatted_html += f'<div class="line"><span class="value">{line}</span></div>'
+        formatted_html += '</div>'
+        
+        st.markdown(formatted_html, unsafe_allow_html=True)
+        
+        st.info(f"🔢 رقم الفاتورة التالي: {st.session_state.next_number}")
+        
+        # أزرار الإجراءات
+        st.markdown("### 📌 الإجراءات")
+        
+        copy_btn_html = f"""
+        <button onclick="copyToClipboard(`{result}`)" 
+            style="width:100%;padding:12px;background-color:#243b53;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:bold;font-size:16px;margin:4px 0;">
+            📋 نسخ النتيجة للحافظة
+        </button>
+        """
+        st.markdown(copy_btn_html, unsafe_allow_html=True)
+        
+        col_download, col_whatsapp = st.columns(2)
+        
+        with col_download:
+            current_inv_num = data.get('رقم الفاتورة', 'result') if data else 'result'
+            st.download_button(
+                label="💾 تحميل كملف نصي",
+                data=result,
+                file_name=f"فاتورة_{current_inv_num}.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
+        
+        with col_whatsapp:
+            whatsapp_text = result.replace('\n', '%0A')
+            whatsapp_url = f"https://web.whatsapp.com/send?text={whatsapp_text}"
+            st.markdown(
+                f'<a href="{whatsapp_url}" target="_blank" style="text-decoration:none;">'
+                f'<button style="width:100%;padding:12px;background-color:#25D366;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:bold;font-size:16px;margin:4px 0;">'
+                f'💬 فتح في واتساب'
+                f'</button></a>',
+                unsafe_allow_html=True
+            )
+    
+    elif not uploaded_file and not st.session_state.extraction_result:
         st.info("👆 يرجى اختيار ملف PDF للبدء في استخراج البيانات")
         
         # عرض مثال توضيحي
