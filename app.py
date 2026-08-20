@@ -1,10 +1,11 @@
 """
-نظام النسر لاستخراج الفواتير - النسخة الخامسة (إصلاح استخراج الاسم والحي)
+نظام النسر لاستخراج الفواتير - النسخة الخامسة المستقرة
 المهندس: عبد السلام فيصل العمري
 """
 
 import json
 import re
+import time
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -34,20 +35,19 @@ MAX_CYCLE = 50
 
 # ==================== دوال المعالجة الأساسية ====================
 
-def normalize_digits(value: str) -> str:
+def normalize_digits(value):
     return value.translate(str.maketrans(
         ARABIC_DIGITS + PERSIAN_DIGITS,
         ENGLISH_DIGITS + ENGLISH_DIGITS
     ))
 
-def clean_spaces(value: str) -> str:
+def clean_spaces(value):
     value = unicodedata.normalize("NFKC", value)
     value = value.replace("\u200f", "").replace("\u200e", "")
     value = re.sub(r"[ \t]+", " ", value)
     return value.strip()
 
-def reverse_pdf_line(value: str) -> str:
-    """عكس السطر العربي فقط، مع الحفاظ على الإنجليزي."""
+def reverse_pdf_line(value):
     value = clean_spaces(value)
     if not value:
         return value
@@ -57,14 +57,12 @@ def reverse_pdf_line(value: str) -> str:
         return value
     return clean_spaces(value[::-1])
 
-def readable_lines(text: str):
-    """تحويل النص الخام إلى سطور مقروءة."""
+def readable_lines(text):
     lines = [clean_spaces(line) for line in text.splitlines() if line.strip()]
     reversed_lines = [reverse_pdf_line(line) for line in lines]
     return lines, reversed_lines
 
-def clean_value(value: str) -> str:
-    """تنظيف القيمة من الرموز الزائدة."""
+def clean_value(value):
     if not value:
         return value
     value = normalize_digits(value)
@@ -74,78 +72,51 @@ def clean_value(value: str) -> str:
 
 # ==================== دوال استخراج النص ====================
 
-def extract_pdf_text(pdf_file) -> str:
-    """استخراج النص الكامل من PDF باستخدام PyMuPDF."""
+def extract_pdf_text(pdf_file):
     if not PYMUPDF_AVAILABLE:
         raise RuntimeError("مكتبة PyMuPDF غير مثبتة. قم بتثبيتها: pip install PyMuPDF")
-    
     pdf_file.seek(0)
     doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
     chunks = []
-    
     for page in doc:
         chunks.append(page.get_text())
-    
     doc.close()
     return "\n".join(chunks)
 
-def extract_customer_region_text(pdf_file) -> str:
-    """استخراج نص منطقة العميل من الصفحة باستخدام الإحداثيات."""
+def extract_customer_region_text(pdf_file):
     if not PYMUPDF_AVAILABLE:
         return ""
-    
     pdf_file.seek(0)
     doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
     page = doc[0]
-    
     page_width = page.rect.width
     page_height = page.rect.height
-    
-    # تجربة إحداثيات مختلفة لضمان الحصول على منطقة العميل
-    # الإحداثيات الأساسية
-    customer_rect = fitz.Rect(
-        0, 
-        page_height * 0.15, 
-        page_width * 0.60, 
-        page_height * 0.80
-    )
-    
+    customer_rect = fitz.Rect(0, page_height * 0.15, page_width * 0.60, page_height * 0.80)
     region_text = page.get_text(clip=customer_rect)
     doc.close()
-    
     return region_text
 
 def find_first(patterns, text, flags=re.IGNORECASE | re.MULTILINE):
-    """البحث عن أول تطابق لقائمة من الأنماط."""
     for pattern in patterns:
         match = re.search(pattern, text, flags)
         if match:
             return clean_spaces(match.group(1))
     return "غير مذكور"
 
-def extract_phone(text: str) -> str:
-    """استخراج رقم الجوال وتنسيقه."""
+def extract_phone(text):
     text = normalize_digits(text)
     matches = re.findall(r"\+?\d[\d\s()\-]{8,}\d", text)
-    
     for candidate in matches:
         digits = re.sub(r"\D", "", candidate)
         if digits.startswith("966") and len(digits) >= 12:
             return "+" + digits
         if digits.startswith("05") and len(digits) == 10:
             return "+966" + digits[1:]
-    
     return "غير مذكور"
 
-# ==================== دوال استخراج اسم العميل والحي (المحسنة) ====================
+# ==================== دوال استخراج اسم العميل والحي ====================
 
-def extract_customer_name(raw_text: str, reversed_text: str, region_raw: str = "", region_reversed: str = "") -> str:
-    """
-    استخراج اسم العميل باستخدام طرق متعددة ومرنة.
-    البحث في: النص الخام، النص المعكوس، نص المنطقة، نص المنطقة المعكوس.
-    """
-    
-    # جميع النصوص الممكنة للبحث
+def extract_customer_name(raw_text, reversed_text, region_raw="", region_reversed=""):
     all_texts = [
         ("المنطقة المعكوسة", region_reversed),
         ("النص المعكوس", reversed_text),
@@ -153,21 +124,15 @@ def extract_customer_name(raw_text: str, reversed_text: str, region_raw: str = "
         ("النص الخام", raw_text),
     ]
     
-    # قائمة بأنماط البحث عن اسم العميل (الأكثر دقة أولاً)
     name_patterns = [
-        # نمط: مصدرة إلى: الاسم
         r"مصدرة\s*(?:إلى|الى|إل|ال|ىل|إىل|اىل|يل)\s*[:：]?\s*([^\n،,]+)",
-        # نمط: مصدرة إلى الاسم (بدون نقطتين)
         r"مصدرة\s*(?:إلى|الى|إل|ال|ىل|إىل|اىل|يل)\s+([^\n،,]+)",
-        # نمط: اسم العميل: الاسم
         r"(?:اسم\s*العميل|الاسم)\s*[:：]?\s*([^\n،,]+)",
-        # نمط: العميل: الاسم
         r"العميل\s*[:：]?\s*([^\n،,]+)",
-        # نمط: أي سطر يحتوي على "مصدرة" متبوع بسطر يحتوي على اسم
         r"مصدرة[^\n]*\n\s*([^\n،,]{2,50})",
     ]
     
-    # الطريقة الأولى: البحث بالأنماط في جميع النصوص
+    # الطريقة 1: البحث بالأنماط
     for text_name, text_content in all_texts:
         if not text_content:
             continue
@@ -175,18 +140,16 @@ def extract_customer_name(raw_text: str, reversed_text: str, region_raw: str = "
             match = re.search(pattern, text_content, re.IGNORECASE)
             if match:
                 candidate = clean_value(match.group(1))
-                # التأكد من أن الاسم ليس كلمة عامة
                 if candidate and candidate not in {
                     "السعودية", "الرياض", "غير مذكور", "المتجر", "العنوان",
                     "الحي", "الجوال", "الهاتف", "الطلب", "الفاتورة"
                 } and len(candidate) >= 2:
-                    # إزالة أي كلمات زائدة مثل "مصدرة من"
                     candidate = candidate.split("مصدرة")[0].strip()
                     candidate = candidate.split("المتجر")[0].strip()
                     if candidate:
                         return candidate
     
-    # الطريقة الثانية: البحث عن السطر الذي يأتي بعد سطر يحتوي على "مصدرة"
+    # الطريقة 2: السطر بعد "مصدرة"
     for text_name, text_content in all_texts:
         if not text_content:
             continue
@@ -194,39 +157,28 @@ def extract_customer_name(raw_text: str, reversed_text: str, region_raw: str = "
         for i, line in enumerate(lines):
             if "مصدرة" in line and i + 1 < len(lines):
                 next_line = clean_value(lines[i + 1])
-                if next_line and next_line not in {
-                    "السعودية", "الرياض", "غير مذكور", "", "المتجر"
-                } and len(next_line) >= 2:
-                    # التأكد من أن السطر التالي ليس عنوان المتجر
+                if next_line and next_line not in {"السعودية", "الرياض", "غير مذكور", "", "المتجر"} and len(next_line) >= 2:
                     if "المتجر" not in next_line and "لأحذية" not in next_line and "النسر" not in next_line:
                         return next_line
     
-    # الطريقة الثالثة: البحث الاحتياطي - أخذ أول سطر عربي طويل بعد "مصدرة"
+    # الطريقة 3: تقسيم النص حول "مصدرة"
     for text_name, text_content in all_texts:
         if not text_content:
             continue
-        # تقسيم النص إلى أجزاء حول كلمة "مصدرة"
         parts = re.split(r"مصدرة", text_content)
         if len(parts) >= 2:
-            # الجزء الثاني يحتوي على ما بعد كلمة مصدرة الأولى (العميل)
             after_first = parts[1]
-            # البحث عن أول سطر يحتوي على أحرف عربية
             for line in after_first.split('\n'):
                 line_clean = clean_value(line)
                 if line_clean and len(re.findall(r"[\u0600-\u06ff]", line_clean)) >= 3:
                     if line_clean not in {"السعودية", "الرياض"} and "المتجر" not in line_clean:
-                        # إزالة أي كلمات زائدة
                         line_clean = line_clean.split("،")[0].split(",")[0].strip()
                         if line_clean and len(line_clean) >= 2:
                             return line_clean
     
     return "غير مذكور"
 
-def extract_neighborhood(raw_text: str, reversed_text: str, region_raw: str = "", region_reversed: str = "") -> str:
-    """
-    استخراج اسم الحي باستخدام طرق متعددة ومرنة.
-    """
-    
+def extract_neighborhood(raw_text, reversed_text, region_raw="", region_reversed=""):
     all_texts = [
         ("المنطقة المعكوسة", region_reversed),
         ("النص المعكوس", reversed_text),
@@ -234,13 +186,13 @@ def extract_neighborhood(raw_text: str, reversed_text: str, region_raw: str = ""
         ("النص الخام", raw_text),
     ]
     
-    # الطريقة الأولى: البحث عن نمط "حي + اسم الحي"
     neighborhood_patterns = [
         r"حي\s+(?!شارع\b)([^،,\n]+)",
         r"حي\s*[:：]?\s*([^،,\n]+)",
         r"(?:الحي|الحياء)\s*[:：]?\s*([^،,\n]+)",
     ]
     
+    # الطريقة 1: البحث عن نمط "حي + اسم"
     for text_name, text_content in all_texts:
         if not text_content:
             continue
@@ -248,16 +200,13 @@ def extract_neighborhood(raw_text: str, reversed_text: str, region_raw: str = ""
             matches = re.findall(pattern, text_content, re.IGNORECASE)
             for candidate in matches:
                 candidate = clean_value(candidate)
-                if candidate and candidate not in {
-                    "الحي", "العنوان", "غير مذكور", "", "شارع"
-                } and len(candidate) >= 2:
-                    # تنظيف الاسم من أي زوائد
+                if candidate and candidate not in {"الحي", "العنوان", "غير مذكور", "", "شارع"} and len(candidate) >= 2:
                     candidate = candidate.split("،")[0].split(",")[0].strip()
                     candidate = candidate.split("شارع")[0].strip()
                     if candidate and len(candidate) >= 2:
                         return candidate
     
-    # الطريقة الثانية: البحث عن أسماء أحياء شائعة مباشرة
+    # الطريقة 2: البحث عن أسماء أحياء شائعة
     common_neighborhoods = [
         "العريجاء الغربي", "العريجاء الشرقي", "العريجاء الوسطي", "العريجاء",
         "النرجس", "العزيزية", "الملقا", "المروج", "الروضة", "السويدي",
@@ -277,21 +226,18 @@ def extract_neighborhood(raw_text: str, reversed_text: str, region_raw: str = ""
             continue
         text_clean = clean_spaces(text_content)
         for neighborhood in common_neighborhoods:
-            # البحث عن تطابق جزئي ذكي
             if neighborhood in text_clean:
                 return neighborhood
     
-    # الطريقة الثالثة: البحث عن أي كلمة تسبقها "حي" في النص الكامل
+    # الطريقة 3: البحث عن كلمة "حي" في الكلمات
     for text_name, text_content in all_texts:
         if not text_content:
             continue
-        # تقسيم النص إلى كلمات والبحث عن كلمة "حي"
         words = text_content.split()
         for i, word in enumerate(words):
             if "حي" in word and i + 1 < len(words):
                 next_word = clean_value(words[i + 1])
                 if next_word and len(next_word) >= 2:
-                    # جمع الكلمات التالية التي قد تكون جزءاً من اسم الحي
                     full_name = next_word
                     for j in range(i + 2, min(i + 5, len(words))):
                         extra = clean_value(words[j])
@@ -307,15 +253,12 @@ def extract_neighborhood(raw_text: str, reversed_text: str, region_raw: str = ""
 
 # ==================== الدالة الرئيسية لاستخراج الفاتورة ====================
 
-def extract_invoice(text: str, invoice_number: int, pdf_file=None) -> dict:
-    """استخراج جميع بيانات الفاتورة."""
-    
+def extract_invoice(text, invoice_number, pdf_file=None):
     text = normalize_digits(text)
     raw_lines, reversed_lines = readable_lines(text)
     raw_text = "\n".join(raw_lines)
     readable_text = "\n".join(reversed_lines)
     
-    # استخراج نص منطقة العميل إذا كان ملف PDF متاحاً
     region_raw = ""
     region_reversed = ""
     if pdf_file:
@@ -325,33 +268,32 @@ def extract_invoice(text: str, invoice_number: int, pdf_file=None) -> dict:
             _, region_rev_lines = readable_lines(region_raw)
             region_reversed = "\n".join(region_rev_lines)
     
-    # ==================== رقم الطلب ====================
+    # رقم الطلب
     order_number = find_first([
         r"(\d{6,})\s*[:：]?\s*رقم\s*الطلب",
         r"(\d{6,})\s*[:：]?\s*بلطلا\s*مقر",
         r"رقم\s*الطلب\s*[:：]?\s*(\d{6,})",
     ], raw_text)
-    
     if order_number == "غير مذكور":
         order_number = find_first([r"رقم\s*الطلب\s*[:：]?\s*(\d{6,})"], readable_text)
     
-    # ==================== اسم العميل (المحسن) ====================
+    # اسم العميل
     customer = extract_customer_name(raw_text, readable_text, region_raw, region_reversed)
     
-    # ==================== اسم الحي (المحسن) ====================
+    # اسم الحي
     neighborhood = extract_neighborhood(raw_text, readable_text, region_raw, region_reversed)
     
-    # ==================== رقم الجوال ====================
+    # رقم الجوال
     phone = extract_phone(raw_text)
     
-    # ==================== اليوم ====================
+    # اليوم
     day_match = re.search(
         r"\b(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)\b",
         raw_text, re.IGNORECASE
     )
     day = DAYS.get(day_match.group(1).capitalize(), day_match.group(1)) if day_match else "غير مذكور"
     
-    # ==================== معلومات الدورة ====================
+    # معلومات الدورة
     cycle_position = ((invoice_number - 1) % MAX_CYCLE) + 1
     cycle_number = ((invoice_number - 1) // MAX_CYCLE) + 1
     
@@ -369,8 +311,7 @@ def extract_invoice(text: str, invoice_number: int, pdf_file=None) -> dict:
     
     return result
 
-def format_invoice(data: dict) -> str:
-    """تنسيق بيانات الفاتورة كنص منظم."""
+def format_invoice(data):
     return "\n".join([
         f"اليوم: {data['اليوم']}",
         f"محتوى الفاتورة رقم {data['رقم الفاتورة']}:",
@@ -383,15 +324,13 @@ def format_invoice(data: dict) -> str:
 
 # ==================== دوال إدارة الإعدادات والإحصائيات ====================
 
-def save_full_settings(data: dict):
-    """حفظ جميع الإعدادات والإحصائيات."""
+def save_full_settings(data):
     STATE_FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
 
-def load_all_settings() -> dict:
-    """تحميل جميع الإعدادات والإحصائيات."""
+def load_all_settings():
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         if "total_extracted" not in data:
@@ -412,8 +351,7 @@ def load_all_settings() -> dict:
             "today_count": 0,
         }
 
-def increment_stats_and_save(next_number: int):
-    """زيادة الإحصائيات وحفظها."""
+def increment_stats_and_save(next_number):
     data = load_all_settings()
     data["next_invoice_number"] = next_number
     data["total_extracted"] = data.get("total_extracted", 0) + 1
@@ -427,8 +365,7 @@ def increment_stats_and_save(next_number: int):
 
 # ==================== دوال لوحة التحكم ====================
 
-def get_cycle_info(current_number: int) -> dict:
-    """الحصول على معلومات الدورة الحالية."""
+def get_cycle_info(current_number):
     cycle_num = ((current_number - 1) // MAX_CYCLE) + 1
     position = ((current_number - 1) % MAX_CYCLE) + 1
     remaining = MAX_CYCLE - position
@@ -453,8 +390,7 @@ if 'extraction_result' not in st.session_state:
 if 'extraction_data' not in st.session_state:
     st.session_state.extraction_data = None
 
-# ==================== واجهة Streamlit ====================
-
+# ==================== إعداد الصفحة ====================
 st.set_page_config(
     page_title="نظام النسر | استخراج الفواتير",
     page_icon="🦅",
@@ -462,7 +398,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS والتصميم
+# ==================== CSS والتصميم ====================
 st.markdown("""
 <style>
     * { font-family: 'Segoe UI', 'Arial', sans-serif; }
@@ -706,23 +642,23 @@ with col1:
     uploaded_file = st.file_uploader(
         "اختر ملف الفاتورة",
         type="pdf",
-        key="pdf_uploader"
+        key="pdf_uploader_v5"
     )
     
-    if uploaded_file:
+    if uploaded_file is not None:
         st.success(f"✅ تم اختيار الملف: {uploaded_file.name}")
     
     extract_btn = st.button(
         "🚀 استخراج البيانات",
         type="primary",
         use_container_width=True,
-        disabled=not uploaded_file
+        disabled=(uploaded_file is None)
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
     # ========== عملية الاستخراج ==========
-    if uploaded_file and extract_btn:
+    if uploaded_file is not None and extract_btn:
         progress_bar = st.progress(0)
         status_text = st.empty()
         
@@ -753,7 +689,6 @@ with col2:
             progress_bar.progress(100)
             status_text.text("✅ تم الانتهاء بنجاح!")
             
-            import time
             time.sleep(0.8)
             progress_bar.empty()
             status_text.empty()
@@ -766,7 +701,7 @@ with col2:
             st.session_state.extraction_data = None
     
     # ========== عرض النتائج ==========
-    if st.session_state.extraction_result:
+    if st.session_state.extraction_result is not None:
         result = st.session_state.extraction_result
         data = st.session_state.extraction_data
         
@@ -820,7 +755,7 @@ with col2:
                 unsafe_allow_html=True
             )
     
-    elif not uploaded_file and not st.session_state.extraction_result:
+    elif uploaded_file is None and st.session_state.extraction_result is None:
         st.info("👆 يرجى اختيار ملف PDF للبدء في استخراج البيانات")
         
         st.markdown("### 📋 مثال على النتيجة المتوقعة:")
